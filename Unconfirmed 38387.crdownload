@@ -1,0 +1,74 @@
+// =====================================================================
+// Topic 7 - MongoDB II: Aggregation Framework and indexing
+// Run:  mongosh "mongodb+srv://<user>:<password>@cluster0.xxxxx.mongodb.net/" --file topic7.js
+// Prerequisite (terminal):
+//   python3 gen_orders.py
+//   mongoimport --uri "<URI>/shop_db" --collection users  --file users.json  --jsonArray
+//   mongoimport --uri "<URI>/shop_db" --collection orders --file orders.json --jsonArray
+// =====================================================================
+db = db.getSiblingDB("shop_db");
+
+print("orders:", db.orders.countDocuments(), " users:", db.users.countDocuments());   // 600 / 50
+
+// ---------- 1. Pipeline 1: top-5 categories by revenue since 2025-10-05 ----------
+// $match  -> filter early (can use an index on orderDate)
+// $unwind -> one document per element of the nested items[] array
+// $group  -> sum price*qty per category
+// $sort / $limit -> top 5
+print("--- Top 5 categories by revenue ---");
+printjson(db.orders.aggregate([
+  { $match: { orderDate: { $gte: ISODate("2025-10-05") } } },
+  { $unwind: "$items" },
+  { $group: { _id: "$items.category",
+              revenue: { $sum: { $multiply: ["$items.price", "$items.qty"] } } } },
+  { $sort: { revenue: -1 } },
+  { $limit: 5 }
+]).toArray());
+
+// ---------- 2. Pipeline 2: top-5 customers with $lookup ----------
+print("--- Top 5 customers ---");
+printjson(db.orders.aggregate([
+  { $group: { _id: "$customerId", total: { $sum: "$amount" }, orders: { $sum: 1 } } },
+  { $sort: { total: -1 } },
+  { $limit: 5 },
+  { $lookup: { from: "users", localField: "_id", foreignField: "_id", as: "customer" } },
+  { $unwind: "$customer" },                                  // customer[] -> single object
+  { $project: { _id: 0, name: "$customer.name", email: "$customer.email", total: 1, orders: 1 } }
+]).toArray());
+
+// ---------- 3. Query plan BEFORE indexing ----------
+// make sure no secondary index exists, so the run is reproducible
+try { db.orders.dropIndex("customerId_1_orderDate_-1"); } catch (e) { /* index did not exist */ }
+
+var cust = db.orders.findOne({}, { customerId: 1 }).customerId;   // replaces ObjectId("...")
+function summary(label) {
+  var p = db.orders.find({ customerId: cust }).explain("executionStats");
+  var st = p.executionStats;
+  // find the winning plan's stage names (COLLSCAN or IXSCAN)
+  var stages = [], s = p.queryPlanner.winningPlan;
+  while (s) { stages.push(s.stage); s = s.inputStage; }
+  print(label, "| stages:", stages.join(" <- "),
+        "| totalDocsExamined:", st.totalDocsExamined,
+        "| totalKeysExamined:", st.totalKeysExamined,
+        "| nReturned:", st.nReturned,
+        "| executionTimeMillis:", st.executionTimeMillis);
+}
+summary("BEFORE index");     // expect COLLSCAN, totalDocsExamined = 600
+
+// ---------- 4. Compound index (ESR: Equality, Sort, Range) ----------
+// customerId is tested by equality, orderDate is used for sorting/range -> { customerId:1, orderDate:-1 }
+db.orders.createIndex({ customerId: 1, orderDate: -1 });
+summary("AFTER  index");     // expect FETCH <- IXSCAN, totalDocsExamined = nReturned
+
+// full output for the report:
+printjson(db.orders.find({ customerId: cust }).explain("executionStats").executionStats);
+
+// ---------- 5. TTL index on sessions ----------
+db.sessions.drop();
+db.sessions.createIndex({ createdAt: 1 }, { expireAfterSeconds: 60 });
+db.sessions.insertOne({ userId: "u1", createdAt: new Date() });
+print("sessions right after insert:", db.sessions.countDocuments());   // 1
+print("Now wait 1-2 minutes (the TTL monitor runs every 60 s), then run in mongosh:");
+print("   use shop_db; db.sessions.find()      // expect: empty result");
+
+print("=== Topic 7 finished ===");

@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""Generates products.json (60 documents) for Topic 6."""
+import json, random
+
+random.seed(42)
+categories = ["electronics", "books", "clothing", "home", "toys", "discontinued"]
+weights    = [18, 14, 10, 8, 6, 4]          # guarantees ~60 docs incl. some "discontinued"
+names = {
+    "electronics": ["Phone", "Laptop", "Headphones", "Monitor", "Keyboard", "Tablet", "Camera", "Speaker"],
+    "books":       ["Novel", "Cookbook", "Biography", "Atlas", "Textbook", "Comic"],
+    "clothing":    ["T-Shirt", "Jacket", "Jeans", "Sneakers", "Scarf"],
+    "home":        ["Lamp", "Chair", "Blender", "Pillow"],
+    "toys":        ["Puzzle", "Robot", "Board Game"],
+    "discontinued":["Old Radio", "Retro Console", "Floppy Case", "VHS Player"],
+}
+tag_pool = ["new", "popular", "eco", "gift", "premium", "budget", "limited"]
+price_range = {"electronics": (80, 1500), "books": (8, 60), "clothing": (15, 180),
+               "home": (20, 250), "toys": (10, 90), "discontinued": (5, 70)}
+
+docs = []
+for cat, n in zip(categories, weights):
+    for i in range(n):
+        lo, hi = price_range[cat]
+        docs.append({
+            "name": f"{random.choice(names[cat])} {random.randint(100, 999)}",
+            "price": round(random.uniform(lo, hi), 2),
+            "category": cat,
+            "tags": random.sample(tag_pool, random.randint(1, 3)),
+            "stock": random.randint(0, 200),
+        })
+
+with open("products.json", "w") as f:
+    json.dump(docs, f, indent=1)
+print(f"products.json written: {len(docs)} documents")
